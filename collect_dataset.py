@@ -2,12 +2,11 @@ import datetime
 import os
 import pickle
 
-from camera.realsense import UsbRealsenseCamera
+from light_grip.camera import UsbRealsenseCamera
 from dataset.labelling import TwoFingerManualOracle
 from model.imitation_learning import ImitationLearning
 from picking import Picking
-from robot.abstract import UR5eConfiguration, AlwaysSuccessfulUR5eMock
-from robot.two_finger import UR5eTwoFinger
+from light_grip.robot import UR5eConfiguration, AlwaysSuccessfulUR5eMock
 
 
 def main():

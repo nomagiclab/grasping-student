@@ -1,10 +1,9 @@
-from camera.realsense import UsbRealsenseCamera
-from dataset.pointwise import PickingDataset
+from light_grip.camera import UsbRealsenseCamera
 from model.imitation_learning import ImitationLearning
-from model.oracle import MonitoringAffordanceNetworkBasedOracle, RandomOracle
+from model.oracle import MonitoringAffordanceNetworkBasedOracle
 from picking import Picking
-from robot.abstract import UR5eConfiguration
-from robot.two_finger import UR5eTwoFinger
+from light_grip.robot import UR5eConfiguration
+from light_grip.robot import UR5eTwoFinger
 
 
 def main():
