@@ -9,9 +9,11 @@ import torch.nn.functional as F
 import torch
 import math
 
+from dataset.pointwise import PickingDataset
+
 
 class RotationsModule(nn.Module, abc.ABC):
-    def __init__(self, backbone: nn.Module, num_rotations=8, max_angle=math.pi, padding=True, padding_noise=0.):
+    def __init__(self, backbone: nn.Module, num_rotations=8, max_angle=math.pi, padding=True, padding_noise=0., noise_normalization=True):
         super().__init__()
         self.backbone = backbone
         self.backbone.train()
@@ -20,6 +22,7 @@ class RotationsModule(nn.Module, abc.ABC):
         self.max_angle = max_angle
         self.padding = padding
         self.padding_noise = padding_noise
+        self.noise_normalization = noise_normalization
 
     @staticmethod
     def rotate_2dvector(x, y, theta):
@@ -49,7 +52,7 @@ class RotationsModule(nn.Module, abc.ABC):
         if type(theta) == float:
             theta = torch.tensor(theta)
         m = AffordanceRotationsModule.rotation_matrix2d(theta.clone().detach())
-        m = torch.concat([m] * x.shape[0])
+        # m = torch.concat([m] * x.shape[0])
         grid = F.affine_grid(m, x.size(), align_corners=True).type(x.type())
         x = F.grid_sample(x, grid, align_corners=True, padding_mode="zeros", mode=mode)
         return x
@@ -102,7 +105,7 @@ class AffordanceRotationsModule(RotationsModule):
             x = F.pad(x, (padding_width,) * 4)
 
         ys = []
-        if not idxs: idxs = range(self.num_rotations)
+        if idxs is None: idxs = range(self.num_rotations)
         for n in idxs:
             theta = n * self.max_angle / self.num_rotations
             if type(theta) == float: theta = torch.tensor(theta)
@@ -113,15 +116,12 @@ class AffordanceRotationsModule(RotationsModule):
 
             if self.padding_noise > 0.:
                 assert self.padding
-                noise = torch.tensor(np.random.normal(0, self.padding_noise, x.shape), dtype=x.dtype, device=x.device)
-                x[x == 0.] = noise[x == 0.]
+                noise = torch.tensor(np.random.normal(0, self.padding_noise, rotated.shape), dtype=rotated.dtype, device=rotated.device)
+                rotated[rotated == 0.] = (noise[rotated == 0.] - PickingDataset.mean[-1]) / PickingDataset.std[-1] if self.noise_normalization else noise[rotated==0.]
+            else:
+                rotated[rotated == 0.] = (rotated[rotated == 0.] - PickingDataset.mean[-1]) / PickingDataset.std[-1] if self.noise_normalization else rotated[rotated==0.]
 
-            rotated = torch.tensor(
-                rotated,
-                dtype=next(iter(self.backbone.parameters())).dtype,
-                device=next(iter(self.backbone.parameters())).device,
-            )
-
+            rotated = rotated.type(next(iter(self.backbone.parameters())).dtype).to(next(iter(self.backbone.parameters())).device)
             y = self.backbone(rotated)
 
             if isinstance(y, OrderedDict):
@@ -135,10 +135,10 @@ class AffordanceRotationsModule(RotationsModule):
             # ys.append(y.clone().detach().cpu() if inference else y)
             ys.append(y)
 
+        shape = copy.copy(ys[0].shape) + (len(ys),)
+        ys = torch.stack(ys, dim=len(shape) - 1).reshape(shape[0], -1)
         if softmax_at_the_end:
-            shape = copy.copy(ys[0].shape) + (len(ys),)
-            ys = torch.stack(ys, dim=len(shape) - 1).reshape(shape[0], -1)
             ys = torch.nn.Softmax(dim=1)(ys)
-            ys = ys.reshape(shape)
+        ys = ys.reshape(shape)
 
         return ys

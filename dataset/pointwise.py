@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import random
@@ -17,8 +18,6 @@ from torch.utils.data import Dataset
 import torch
 import numpy as np
 
-from dataset.utils import show_dataset
-
 
 class AugmentedPickingDataset(Dataset):
     def __init__(self, backbone: Dataset, overwrite_num_rotations=None):
@@ -35,6 +34,7 @@ class AugmentedPickingDataset(Dataset):
         row, col = -1, -1
         idx = result["grasping_index"]
         h = result["heightmap"]
+
         n = self.overwrite_num_rotations if self.overwrite_num_rotations is not None else result["num_rotations"]
         if "num_rotations" not in result: result["num_rotations"] = self.overwrite_num_rotations
 
@@ -62,18 +62,23 @@ class AugmentedPickingDataset(Dataset):
         idx["row"], idx["col"] = row, col
         idx["angle_index"] = (idx["angle_index"] * (n // result["num_rotations"]) + theta_idx) % n
 
-        scale = np.random.uniform(0.98, 1.02)
-        shear = list(np.random.uniform(-1, 1, 2))
-        angle_noise = np.random.uniform(-0.5, 0.5)
 
-        result["pure_heightmap"] = F.affine(h, -theta_idx / n * 180, [t[0], t[1]], scale=1., shear=[0., 0.])
 
-        dt = [random.randint(-dt_range, dt_range), random.randint(-dt_range, dt_range)]
-        h = F.affine(h, -theta_idx / n * 180 + angle_noise, [t[0] + dt[0], t[1] + dt[1]], scale, shear)
+        h = F.affine(h, -theta_idx / n * 180, [t[0], t[1]], scale=1., shear=[0., 0.])
+        result["pure_heightmap"] = PickingDataset.normalize(h)
+
+        # scale = np.random.uniform(0.98, 1.02)
+        # shear = list(np.random.uniform(-1, 1, 2))
+        # angle_noise = np.random.uniform(-0.5, 0.5)
+        # dt = [random.randint(-dt_range, dt_range), random.randint(-dt_range, dt_range)]
+        # h = F.affine(h, -theta_idx / n * 180 + angle_noise, [t[0] + dt[0], t[1] + dt[1]], scale, shear)
 
         # Gaussian noise
-        noise = np.random.normal(0, 0.01, h.shape)
-        h += noise
+        noise = np.random.normal(0, 0.01, h[3].shape)
+        # result["pure_heightmap"] = copy.deepcopy(PickingDataset.normalize_depth(h[3:, ...]))#F.affine(h, -theta_idx / n * 180, [t[0], t[1]], scale=1., shear=[0., 0.])
+
+        h[3, ...] += noise
+        h = PickingDataset.normalize(h)
 
         result["heightmap"] = h
         result["grasping_index"] = idx
@@ -131,20 +136,22 @@ class ExtendedPickingDataset(Dataset):
                 }, f)
 
 
-
 class PickingDataset(torch.utils.data.Dataset):
     mean = [0.5056109428405762, 0.45094895362854004, 0.4510827958583832, 0.00021378498058766127]
     std = [0.06538673490285873, 0.07051316648721695, 0.07949845492839813, 0.0017423119861632586]
 
     normalize = torchvision.transforms.Normalize(mean, std, inplace=False)
+    normalize_rgb = torchvision.transforms.Normalize(mean[:3], std[:3], inplace=False)
+    normalize_depth = torchvision.transforms.Normalize(mean[3:], std[3:], inplace=False)
 
-    def __init__(self, path, transforms=None):
+    def __init__(self, path, transforms=None, num_rotations=64):
         self.path = Path(path)
         self.transforms = transforms
         self.dates = [p.name[4:-4] for p in self.path.iterdir() if 'img' in p.name]
         self.img_names = [f"img_{date}.png" for date in self.dates]
         self.depth_names = [f"depth_{date}.npy" for date in self.dates]
         self.desc_names = [f"desc_{date}.json" for date in self.dates]
+        self.num_rotations = num_rotations
 
     def __len__(self):
         return len(self.dates)
@@ -161,17 +168,37 @@ class PickingDataset(torch.utils.data.Dataset):
         with open(desc_path, 'r') as fdesc:
             description = json.load(fdesc)
 
+        description["grasping_index"]["angle_index"] = description["grasping_index"]["angle_index"] * (self.num_rotations // description["num_rotations"])
+
         return {
             "heightmap": raw_heightmap,
             "successful": description["successful"],
             "grasping_index": description["grasping_index"],
-            "num_rotations": description["num_rotations"]
+            "num_rotations": self.num_rotations,
         }
 
-
-
 if __name__ == "__main__":
-    root_dir = "dataset/dataset-cables"
-    dataset = ExtendedPickingDataset(root_dir)
-    show_dataset(dataset, lambda x: x["heightmap"][3])
-    show_dataset(dataset, lambda x: x["heightmap"][:3].permute((1, 2, 0)))
+    import matplotlib.pyplot as plt
+    def show_dataset(ds, extract_sample=lambda x: x, samples=4):
+        plt.figure(figsize=(10, 6))
+        p = np.random.permutation(range(len(ds)))
+        for i in range(samples):
+            sample = extract_sample(ds[p[i]])
+            ax = plt.subplot(2, samples, i + 1)
+            # ax.set_title('Sample #{}'.format(i + 1))
+            plt.imshow(sample["heightmap"][3])
+            plt.axis('off')
+
+            ax = plt.subplot(2, samples, samples + i + 1)
+            plt.imshow(sample["heightmap"][:3].permute((1, 2, 0)))
+            plt.axis('off')
+        plt.tight_layout()
+        plt.savefig('./dataset.pdf', dpi=300)
+        plt.show()
+
+    root_dir = clearml.Dataset.get(dataset_name="all-grasps").get_local_copy()
+    # root_dir = clearml.Dataset.get(dataset_name="inga-unnormalized-v1", dataset_project="grip").get_local_copy()
+    dataset = PickingDataset(root_dir)
+
+    show_dataset(dataset)
+

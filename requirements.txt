@@ -6,3 +6,7 @@ torch
 torchvision
 ur-rtde
 gdown
+clearml
+scikit-learn
+segmentation-models-pytorch
+tensorboard

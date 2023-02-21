@@ -25,14 +25,14 @@ class GraspingPoint(NamedTuple):
 class GraspAttempt(NamedTuple):
     """ For batching purposes we are allowing the fields to be lists. """
     heightmap: Union[HeightMapImage, List[HeightMapImage]]
-    raw_heightmap: Union[HeightMapImage, List[HeightMapImage]]
+    raw_heightmap: Union[Optional[HeightMapImage], List[HeightMapImage]]
 
-    rgb: np.ndarray
-    depth: np.ndarray
+    rgb: Optional[np.ndarray]
+    depth: Optional[np.ndarray]
 
     segmentation: Union[Optional[torch.Tensor], List[Optional[torch.Tensor]]]
-    grasping_index: Union[GraspingIndex, List[GraspingIndex]]
-    grasping_point: Union[GraspingPoint, List[GraspingPoint]]
+    grasping_index: Union[Optional[GraspingIndex], List[GraspingIndex]]
+    grasping_point: Union[Optional[GraspingPoint], List[GraspingPoint]]
     successful: Union[bool, List[bool]]
 
     camera_intrinsics: Optional[np.ndarray] = None
@@ -42,3 +42,7 @@ class GraspAttempt(NamedTuple):
     depth_normalization: Optional[Tuple[float, float]] = None
 
     num_rotations: Optional[int] = None
+
+    affordances: Optional[torch.Tensor] = None
+    iteration: Optional[int] = None
+    epoch: Optional[int] = None

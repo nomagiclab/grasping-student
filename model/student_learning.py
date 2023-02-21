@@ -10,21 +10,23 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities import data
 from torch import optim
 from torch.nn import BCELoss
-from torch.utils.data import ConcatDataset
 
-import dataset
 from dataset.pointwise import ExtendedPickingDataset, PickingDataset, AugmentedPickingDataset
 from model.affordance_learning import AffordanceLearning
-from model.metrics import ImitationLearningPointwiseMetrics
-from model.repository import SegmentationModelRepository
+from model.imitation_learning import ImitationLearning
+from model.metrics import ImitationLearningPointwiseMetrics, topn_masks
 from model.rotations import AffordanceRotationsModule
 import segmentation_models_pytorch as smp
 
+fraction = 1.0
+topn_range = 2
 
-class ImitationLearning(pl.LightningModule):
+class StudentLearning(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-5, max_epochs=10):
         super().__init__()
         self.save_hyperparameters()
+        self.device_ = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
         model = smp.FPN(
             encoder_name="resnet50",  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
             encoder_weights="imagenet",  # use `imagenet` pre-trained weights for encoder initialization
@@ -32,14 +34,13 @@ class ImitationLearning(pl.LightningModule):
             classes=1,
             # encoder_depth=4, # model output channels (number of classes in your dataset)
         )
-        self.backbone = model  #SegmentationModelRepository.fcn_resnet_50_rgbd(nchannels=1)
         self.backbone = AffordanceRotationsModule(
-            self.backbone,
+            model,
             num_rotations=64,
             padding_noise=0.01
         )
-        self.device_ = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         self.affordance_model = AffordanceLearning.load_from_checkpoint("../artifacts/affordance_model.ckpt", strict=False).to(self.device_)
+        self.teacher_model = ImitationLearning.load_from_checkpoint(f"../artifacts/teacher-{fraction}.ckpt", strict=False).to(self.device_)
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
@@ -51,10 +52,45 @@ class ImitationLearning(pl.LightningModule):
     def get_angles(self, angle_index):
         return torch.tensor([random.sample([x for x in range(64) if abs(x - angle) > 10], 1)[0] for angle in angle_index])
 
+    def get_idxs(self, h, nth_top=1):
+        h = h[:, 3:4] if h.shape[1] > 1 else h[:, 0:1]
+        h = h.to(self.device_)
+        angles_sample = list(range(64))
+        angles_sample = random.sample(list(range(64)), 16)
+
+        with torch.no_grad():
+            teacher_outputs = self.teacher_model.backbone(
+                h,
+                inference=True,
+                idxs=[x * torch.ones((h.shape[0])).to(self.device_) for x in angles_sample],
+                softmax_at_the_end=True,
+            )
+
+            def unravel_index(index, shape):
+                out = []
+                for dim in reversed(shape):
+                    out.append(index % dim)
+                    index = index // dim
+                return tuple(reversed(out))
+
+            topn = topn_masks(teacher_outputs)
+            masks = (topn[nth_top - 1] * 1.) - ((topn[nth_top - 2] * 1.) if nth_top - 2 > 0 else 0)
+            results = [unravel_index(torch.argmax(mask), mask.shape)[1:] for mask in masks]
+            rows, cols, angles = zip(*results)
+
+            return {
+                "row": torch.tensor(rows, device=self.device_),
+                "col": torch.tensor(cols, device=self.device_),
+                "angle_index": torch.tensor([angles_sample[a] for a in angles], device=self.device_),
+            }
+
     def pointed_bce_loss(self, batch, mode="train"):
-        idxs = batch["grasping_index"]
         h = batch["heightmap"][:, 3:4] if batch["heightmap"].shape[1] > 1 else batch["heightmap"][:, 0:1]
         h = h.to(self.device_)
+        nth_top = random.randint(1, topn_range)
+        idxs = self.get_idxs(h, nth_top=nth_top)
+        # else:
+        #     idxs = batch["grasping_index"]
         affordances = self.backbone(
             h,
             inference=(mode == "val"),
@@ -76,7 +112,7 @@ class ImitationLearning(pl.LightningModule):
             for i, x, y, a in zip(range(len(idxs["row"])), list(idxs["row"]), list(idxs["col"]), list(idxs["angle_index"]))
         ])
 
-        successful = torch.unsqueeze(torch.tensor(batch["successful"], dtype=torch.float, device=affordance.device), dim=1)
+        successful = torch.unsqueeze(torch.tensor(torch.ones_like(batch["successful"]), dtype=torch.float, device=affordance.device), dim=1)
 
         loss = BCELoss()(affordance, successful)
 
@@ -96,20 +132,12 @@ class ImitationLearning(pl.LightningModule):
 
 
 if __name__ == "__main__":
-    task = Task.init(project_name="krzywicki", task_name=f"final-imitation-learning-fraction-0.01")
-    picking_dataset = ConcatDataset([
-        PickingDataset(clearml.Dataset.get(dataset_name="inga-imitation-september-2022", dataset_project="nomagic").get_local_copy()),
-        PickingDataset(clearml.Dataset.get(dataset_name="inga-imitation-august-2022", dataset_project="nomagic").get_local_copy()),
-        PickingDataset(clearml.Dataset.get(dataset_name="inga-imitation-before-august-2022", dataset_project="nomagic").get_local_copy()),
-    ])
+    task = Task.init(project_name="krzywicki", task_name=f"final-student-learning-{fraction}-debug")
+    picking_dataset = PickingDataset(clearml.Dataset.get(dataset_name="all-grasps", dataset_project="nomagic").get_local_copy())
     picking_dataset = AugmentedPickingDataset(picking_dataset, overwrite_num_rotations=64)
 
-    train_len = int(0.8 * (len(picking_dataset)))
+    train_len = int(0.9 * (len(picking_dataset)))
     train_set, val_set = torch.utils.data.random_split(picking_dataset, [train_len, len(picking_dataset) - train_len])
-    fraction = 0.01
-    train_set, _ = torch.utils.data.random_split(train_set, [int(fraction * train_len), train_len - int(fraction * train_len)])
-
-    print(f"Training-set-size: {len(train_set)}, Validation-set-size {len(val_set)}")
 
     def train(batch_size=1, max_epochs=10, **kwargs):
         trainer = pl.Trainer(
@@ -138,7 +166,7 @@ if __name__ == "__main__":
             pin_memory=True,
         )
 
-        model = ImitationLearning(max_epochs=max_epochs, **kwargs)
+        model = StudentLearning(max_epochs=max_epochs, **kwargs)
         trainer.fit(model, train_loader, val_loader)
 
-    train(batch_size=8, lr=1e-3, max_epochs=30)
+    train(batch_size=8, lr=1e-3, max_epochs=30 * topn_range)
