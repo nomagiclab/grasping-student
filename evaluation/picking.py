@@ -38,6 +38,24 @@ class Picking:
             if torch.sum((allowed_heightmap[3]) > 0.0) / torch.sum(torch.ones_like(allowed_heightmap[3])) < 0.02:
                 self.environment.reset_bin_two_boxes()
                 epoch += 1
+                yield GraspAttempt(
+                    heightmap=heightmap,
+                    raw_heightmap=raw_heightmap,
+                    rgb=None,
+                    depth=None,
+                    segmentation=None,
+                    grasping_index=None,
+                    grasping_point=None,
+                    successful=None,
+                    camera_intrinsics=None,
+                    camera_extrinsics=None,
+                    rgb_normalization=None,
+                    depth_normalization=None,
+                    num_rotations=None,
+                    affordances=None,
+                    epoch=epoch,
+                    iteration=iteration,
+                )
                 continue
 
             # Predict grasp
@@ -51,12 +69,49 @@ class Picking:
 
             if len(result) >= 5 and np.sum(result[-5:]) == 0:
                 self.environment.reset_bin_two_boxes()
+                yield GraspAttempt(
+                    heightmap=heightmap,
+                    raw_heightmap=raw_heightmap,
+                    rgb=None,
+                    depth=None,
+                    segmentation=None,
+                    grasping_index=grasping_index,
+                    grasping_point=grasping_point,
+                    successful=successful,
+                    camera_intrinsics=None,
+                    camera_extrinsics=None,
+                    rgb_normalization=None,
+                    depth_normalization=None,
+                    num_rotations=self.model.num_rotations,
+                    affordances=None,
+                    epoch=epoch,
+                    iteration=iteration,
+                )
                 epoch += 1
+                yield GraspAttempt(
+                    heightmap=heightmap,
+                    raw_heightmap=raw_heightmap,
+                    rgb=None,
+                    depth=None,
+                    segmentation=None,
+                    grasping_index=None,
+                    grasping_point=None,
+                    successful=None,
+                    camera_intrinsics=None,
+                    camera_extrinsics=None,
+                    rgb_normalization=None,
+                    depth_normalization=None,
+                    num_rotations=None,
+                    affordances=None,
+                    epoch=epoch,
+                    iteration=iteration,
+                )
                 result = []
+                continue
 
             yield GraspAttempt(
                 heightmap=heightmap,
-                raw_heightmap=None,
+                raw_heightmap=raw_heightmap,
                 rgb=None,
                 depth=None,
                 segmentation=None,
@@ -67,7 +122,7 @@ class Picking:
                 camera_extrinsics=None,
                 rgb_normalization=None,
                 depth_normalization=None,
-                num_rotations=None,
+                num_rotations=self.model.num_rotations,
                 affordances=None,
                 epoch=epoch,
                 iteration=iteration,

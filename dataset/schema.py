@@ -33,7 +33,7 @@ class GraspAttempt(NamedTuple):
     segmentation: Union[Optional[torch.Tensor], List[Optional[torch.Tensor]]]
     grasping_index: Union[Optional[GraspingIndex], List[GraspingIndex]]
     grasping_point: Union[Optional[GraspingPoint], List[GraspingPoint]]
-    successful: Union[bool, List[bool]]
+    successful: Union[Optional[bool], List[bool]]
 
     camera_intrinsics: Optional[np.ndarray] = None
     camera_extrinsics: Optional[np.ndarray] = None

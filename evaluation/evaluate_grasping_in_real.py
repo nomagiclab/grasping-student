@@ -14,21 +14,36 @@ import pickle
 
 
 def main():
-    task = Task.init(project_name="krzywicki", task_name=f"final-robot-evaluation-teacher-no-triangles-dense")
+    task = Task.init(project_name="krzywicki", task_name=f"final-robot-evaluation")
 
-    model = StudentLearning.load_from_checkpoint("../artifacts/teacher-1.0.ckpt", strict=False).cuda()  # 90%
-    model.backbone.num_rotations = 16
-    model.backbone.padding_noise = 0.0
+    teacher = ImitationLearning.load_from_checkpoint("../artifacts/teacher-0.2.ckpt", strict=False).cuda()
+    teacher.backbone.num_rotations = 16
+    teacher.backbone.padding_noise = 0.0
+
+    student = StudentLearning.load_from_checkpoint("../artifacts/student-0.2.ckpt", strict=False).cuda()
+    student.backbone.num_rotations = 16
+    student.backbone.padding_noise = 0.0
 
     environment = UR5eTwoFinger(UR5eConfiguration(z_range=0.1, workspace_size=0.45 + 1/748, iters_tool_contact=1))
 
     camera = UsbRealsenseCamera(heightmap_resolution=1 / 748, workspace=environment.workspace(), realtime=True)
-    oracle = MonitoringAffordanceNetworkBasedOracle(camera, model.backbone, save_folder=None)
-    pipeline = Picking(model.backbone, camera, environment, oracle, heightmap_transform=lambda x: PickingDataset.normalize_depth(x[3:, ...]))
+    oracle = MonitoringAffordanceNetworkBasedOracle(camera, None, save_folder=None)
+    pipeline = Picking(None, camera, environment, oracle, heightmap_transform=lambda x: PickingDataset.normalize_depth(x[3:, ...]))
 
+    epoch = 0
+    current_model = teacher
+    current_model_label = "teacher"
     for grasp in pipeline.loop():
-        with open(f'workbench/{datetime.now().strftime("%d-%m-%Y-%H_%M_%S")}', 'wb') as handle:
-            task.get_logger().report_scalar("success-rate", "metrics", grasp.successful, grasp.iteration)
+        if grasp.epoch != epoch:
+            epoch = grasp.epoch
+            current_model = student if current_model_label == "teacher" else teacher
+            current_model_label = "student" if current_model_label == "teacher" else "teacher"
+
+        oracle.model = current_model.backbone
+        pipeline.model = current_model.backbone
+
+        with open(f'~/{current_model_label}/{datetime.now().strftime("%d-%m-%Y-%H_%M_%S")}', 'wb') as handle:
+            task.get_logger().report_scalar(f"{current_model_label}-success-rate", "metrics", grasp.successful, grasp.iteration)
             pickle.dump(grasp, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
